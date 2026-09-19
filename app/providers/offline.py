@@ -103,8 +103,15 @@ class OfflineLLM(LLM):
             "answer": f"{excerpt}\n\n(Extractive excerpt — set GROQ_API_KEY for a composed answer.)",
             "citations": [doc_id],
             "answerable": True,
-            "conflict_detected": len(blocks) > 1
-            and len({b[0].split("-")[0] for b in blocks[:3]}) > 1,
+            # Deliberately never claims a conflict. An earlier version inferred
+            # one whenever the retrieved passages spanned more than one source
+            # type, which is not a conflict at all — a policy and an FAQ on the
+            # same topic normally agree. The effect was that the very first
+            # question a keyless reviewer asks came back "I've found
+            # conflicting information in our help centre", which is both wrong
+            # and alarming. Real conflicts are found by the deterministic
+            # detector in app/retrieval.py and OR-ed in by the generator.
+            "conflict_detected": False,
             "self_confidence": 0.4,
         }
 
