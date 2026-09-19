@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>LearnForge Support Assistant</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --ink: #14181f; --muted: #626b7a;
+    --line: #e2e6ec; --accent: #2f6df6; --radius: 12px;
+    --ok: #157f47; --warn: #9a6400; --info: #17697f; --esc: #8c2f8c;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0f1216; --panel: #171b21; --ink: #e8ecf2; --muted: #98a2b3;
+      --line: #262c35; --accent: #6f9bff;
+      --ok: #4ec27f; --warn: #e0a83a; --info: #55bcd6; --esc: #d28ad2;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.55 ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  header {
+    padding: 18px 16px; border-bottom: 1px solid var(--line);
+    background: var(--panel); position: sticky; top: 0; z-index: 5;
+  }
+  .wrap { max-width: 900px; margin: 0 auto; }
+  h1 { margin: 0 0 4px; font-size: 17px; letter-spacing: -0.01em; }
+  .caps { font-size: 12.5px; color: var(--muted); }
+  .caps b { color: var(--ink); font-weight: 600; }
+  main { padding: 16px; padding-bottom: 140px; }
+  .msg { margin: 0 0 14px; display: flex; }
+  .msg.user { justify-content: flex-end; }
+  .bubble {
+    max-width: 86%; padding: 11px 14px; border-radius: var(--radius);
+    border: 1px solid var(--line); background: var(--panel); white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  .msg.user .bubble { background: var(--accent); color: #fff; border-color: transparent; }
+  .meta { margin-top: 8px; font-size: 12px; color: var(--muted); display: flex;
+          flex-wrap: wrap; gap: 6px 10px; align-items: center; }
+  .badge {
+    display: inline-block; padding: 1px 8px; border-radius: 999px;
+    font-size: 11.5px; font-weight: 600; border: 1px solid currentColor;
+  }
+  .b-answered { color: var(--ok); }
+  .b-answered_with_caveat { color: var(--warn); }
+  .b-abstained { color: var(--info); }
+  .b-escalated { color: var(--esc); }
+  .sources { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; }
+  .src {
+    border: 1px solid var(--line); border-radius: 9px; padding: 8px 10px;
+    font-size: 12.5px; background: var(--bg);
+  }
+  .src.cited { border-color: var(--accent); }
+  .src .top { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+  .src code { font-weight: 700; }
+  .tag { font-size: 10.5px; text-transform: uppercase; letter-spacing: .04em;
+         color: var(--muted); border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; }
+  .tag.flag { color: var(--warn); border-color: var(--warn); }
+  .excerpt { color: var(--muted); margin-top: 4px; }
+  details { margin-top: 8px; }
+  summary { cursor: pointer; font-size: 12px; color: var(--muted); }
+  pre { background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
+        padding: 10px; overflow: auto; font-size: 11.5px; max-height: 340px; }
+  footer {
+    position: fixed; bottom: 0; left: 0; right: 0; background: var(--panel);
+    border-top: 1px solid var(--line); padding: 12px 16px;
+  }
+  form { display: flex; gap: 8px; }
+  input[type=text] {
+    flex: 1; padding: 11px 13px; border-radius: 10px; font: inherit;
+    border: 1px solid var(--line); background: var(--bg); color: var(--ink);
+  }
+  button {
+    padding: 11px 18px; border-radius: 10px; border: 0; font: inherit; font-weight: 600;
+    background: var(--accent); color: #fff; cursor: pointer;
+  }
+  button:disabled { opacity: .5; cursor: default; }
+  button.ghost { background: transparent; color: var(--muted); border: 1px solid var(--line); }
+  .examples { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .examples button { background: transparent; color: var(--muted); border: 1px solid var(--line);
+                     font-size: 12px; font-weight: 500; padding: 5px 10px; }
+  @media (max-width: 640px) { .bubble { max-width: 95%; } }
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap">
+    <h1>LearnForge Support Assistant</h1>
+    <div class="caps" id="caps">checking capabilities…</div>
+    <div class="examples" id="examples"></div>
+  </div>
+</header>
+
+<main><div class="wrap" id="thread"></div></main>
+
+<footer>
+  <div class="wrap">
+    <form id="form">
+      <input id="input" type="text" autocomplete="off"
+             placeholder="Ask about courses, refunds, access, certificates…" />
+      <button id="send" type="submit">Send</button>
+      <button class="ghost" id="reset" type="button" title="Start a new conversation">New</button>
+    </form>
+  </div>
+</footer>
+
+<script>
+const EXAMPLES = [
+  "How do I reset my password?",
+  "Is my annual subscription billed monthly?",
+  "How long do I have to ask for a refund?",
+  "There's a $79 charge I don't recognise",
+  "What's a good sourdough recipe?"
+];
+const thread = document.getElementById('thread');
+const form = document.getElementById('form');
+const input = document.getElementById('input');
+const send = document.getElementById('send');
+let sessionId = null;
+
+function el(tag, cls, text) {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text !== undefined) n.textContent = text;
+  return n;
+}
+
+function addUser(text) {
+  const row = el('div', 'msg user');
+  row.append(el('div', 'bubble', text));
+  thread.append(row);
+  window.scrollTo(0, document.body.scrollHeight);
+}
+
+function addAssistant(data) {
+  const row = el('div', 'msg');
+  const bubble = el('div', 'bubble');
+  bubble.append(el('div', null, data.reply));
+
+  const meta = el('div', 'meta');
+  const badge = el('span', 'badge b-' + data.action, data.action.replace(/_/g, ' '));
+  meta.append(badge);
+  meta.append(el('span', null, 'confidence ' + data.confidence.toFixed(2)));
+  meta.append(el('span', null, data.latency_ms + ' ms'));
+  if (data.citations.length) meta.append(el('span', null, 'cited ' + data.citations.join(', ')));
+  if (data.escalation_id) {
+    meta.append(el('span', null, `case ${data.escalation_id} → ${data.queue} (${data.priority})`));
+  }
+  bubble.append(meta);
+
+  if (data.reason_codes.length) {
+    bubble.append(el('div', 'meta', 'why: ' + data.reason_codes.join(', ')));
+  }
+
+  if (data.sources.length) {
+    const box = el('div', 'sources');
+    for (const s of data.sources) {
+      const card = el('div', 'src' + (s.cited ? ' cited' : ''));
+      const top = el('div', 'top');
+      top.append(el('code', null, s.doc_id));
+      top.append(el('span', null, s.title));
+      top.append(el('span', 'tag', s.source_type));
+      if (s.date_label) top.append(el('span', 'tag', s.date_label));
+      if (s.is_stale) top.append(el('span', 'tag flag', 'stale'));
+      if (s.has_deprecation_notice) top.append(el('span', 'tag flag', 'withdrawn text'));
+      if (s.cited) top.append(el('span', 'tag', 'cited'));
+      card.append(top);
+      card.append(el('div', 'excerpt', s.excerpt));
+      box.append(card);
+    }
+    bubble.append(box);
+  }
+
+  if (data.diagnostics) {
+    const d = el('details');
+    d.append(el('summary', null, 'Decision trail (rewritten query, scores, verification)'));
+    d.append(el('pre', null, JSON.stringify(data.diagnostics, null, 2)));
+    bubble.append(d);
+  }
+
+  row.append(bubble);
+  thread.append(row);
+  window.scrollTo(0, document.body.scrollHeight);
+}
+
+async function ask(message) {
+  addUser(message);
+  send.disabled = true;
+  const pending = el('div', 'msg');
+  pending.append(el('div', 'bubble', '…'));
+  thread.append(pending);
+  try {
+    const res = await fetch('/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message, session_id: sessionId })
+    });
+    pending.remove();
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    sessionId = data.session_id;
+    addAssistant(data);
+  } catch (err) {
+    pending.remove();
+    const row = el('div', 'msg');
+    row.append(el('div', 'bubble', 'Request failed: ' + err.message));
+    thread.append(row);
+  } finally {
+    send.disabled = false;
+    input.focus();
+  }
+}
+
+form.addEventListener('submit', (e) => {
+  e.preventDefault();
+  const text = input.value.trim();
+  if (!text) return;
+  input.value = '';
+  ask(text);
+});
+
+document.getElementById('reset').addEventListener('click', () => {
+  sessionId = null;
+  thread.innerHTML = '';
+  input.focus();
+});
+
+const examples = document.getElementById('examples');
+for (const q of EXAMPLES) {
+  const b = el('button', null, q);
+  b.type = 'button';
+  b.addEventListener('click', () => ask(q));
+  examples.append(b);
+}
+
+fetch('/health').then(r => r.json()).then(h => {
+  const c = h.capabilities;
+  document.getElementById('caps').innerHTML =
+    `generation <b>${c.generation}</b> · retrieval <b>${c.retrieval_mode}</b>` +
+    ` · verifier <b>${c.verifier ? 'on' : 'off'}</b>` +
+    ` · corpus <b>${h.corpus.documents} docs / ${h.corpus.chunks} chunks</b>`;
+}).catch(() => {
+  document.getElementById('caps').textContent = 'capability check failed';
+});
+</script>
+</body>
+</html>
