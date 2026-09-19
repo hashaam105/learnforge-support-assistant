@@ -173,7 +173,7 @@ class Contextualizer:
             f"LATEST MESSAGE: {query}"
         )
         try:
-            data = self.llm.complete_json(system, user, temperature=0.0, max_tokens=250)
+            data = self.llm.complete_json(system, user, temperature=0.0, max_tokens=700)
         except (LLMError, TypeError):
             return None
         rewritten = str(data.get("standalone_query", "")).strip()

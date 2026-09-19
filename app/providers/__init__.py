@@ -27,11 +27,24 @@ __all__ = [
 ]
 
 
-def get_llm(cfg: Settings | None = None) -> LLM:
+def get_llm(cfg: Settings | None = None, *, role: str = "primary") -> LLM:
+    """Return the model for a role.
+
+    `primary` composes the answer shown to the learner. `utility` handles
+    query rewriting, reranking, entailment checking and summarising — easier
+    tasks that make up most of the calls in a turn and do not need the larger
+    model. See Settings.utility_model for why the split is worth having.
+    """
     cfg = cfg or settings
-    if cfg.has_llm:
-        return GroqLLM(cfg)
-    return OfflineLLM(cfg)
+    if not cfg.has_llm:
+        return OfflineLLM(cfg)
+    if role == "utility":
+        return GroqLLM(
+            cfg,
+            model=cfg.utility_model or cfg.llm_model,
+            reasoning_effort=cfg.utility_reasoning_effort,
+        )
+    return GroqLLM(cfg)
 
 
 def get_embedder(cfg: Settings | None = None) -> Embedder:

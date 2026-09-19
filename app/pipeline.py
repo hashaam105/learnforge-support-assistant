@@ -91,12 +91,18 @@ class SupportAssistant:
         self.cfg = cfg or settings
         self.store = store or Store(self.cfg)
         self.llm = llm if llm is not None else get_llm(self.cfg)
+        # The generator gets the primary model; everything else runs on the
+        # smaller utility model. Tests and eval can override both by passing a
+        # single `llm`, which is then used for every stage.
+        self.utility_llm = llm if llm is not None else get_llm(self.cfg, role="utility")
         self.embedder = embedder if embedder is not None else get_embedder(self.cfg)
 
-        self.retriever = Retriever(self.store, self.cfg, embedder=self.embedder, llm=self.llm)
-        self.contextualizer = Contextualizer(self.llm, self.cfg)
+        self.retriever = Retriever(
+            self.store, self.cfg, embedder=self.embedder, llm=self.utility_llm
+        )
+        self.contextualizer = Contextualizer(self.utility_llm, self.cfg)
         self.generator = Generator(self.llm, self.cfg)
-        self.verifier = Verifier(self.llm, self.cfg)
+        self.verifier = Verifier(self.utility_llm, self.cfg)
 
     # ------------------------------------------------------------------
     def ask(self, question: str, session_id: str | None = None) -> TurnResult:
@@ -262,19 +268,19 @@ class SupportAssistant:
         """
         existing = conversation.get("summary") or ""
         turn_count = int(conversation.get("turn_count") or 0)
-        if turn_count == 0 or turn_count % SUMMARISE_EVERY != 0 or not self.llm.is_live:
+        if turn_count == 0 or turn_count % SUMMARISE_EVERY != 0 or not self.utility_llm.is_live:
             return existing
 
         transcript = "\n".join(f"{h['role'].upper()}: {h['content']}" for h in history)
         try:
-            data = self.llm.complete_json(
+            data = self.utility_llm.complete_json(
                 "TASK: summarize\nYou compress a support conversation for an agent picking it up "
                 "mid-thread. Keep the learner's goal, what has been established, what has been "
                 "tried, and anything still unresolved. Drop pleasantries. Never invent details.\n"
                 'Reply with JSON only: {"summary": "..."}',
                 f"PREVIOUS SUMMARY: {existing or 'none'}\n\nTRANSCRIPT:\n{transcript}",
                 temperature=0.0,
-                max_tokens=300,
+                max_tokens=800,
             )
             return str(data.get("summary", existing)).strip() or existing
         except (LLMError, TypeError):

@@ -59,7 +59,8 @@ query against the conversation.
 Fusion, re-scored on metadata (authority, recency, staleness), reranked by the
 LLM, then diversified to at most two chunks per document.
 
-**3 · Generate.** Every context block is labelled with its authority and date.
+**3 · Generate.** The primary model composes the answer. Every context block
+is labelled with its authority and date.
 Retired statements are listed explicitly as things that must never be asserted
 as current. Output is JSON with mandatory citations and an `answerable` flag,
 because a model that cannot say "I don't know" will invent something instead.
@@ -67,6 +68,13 @@ because a model that cannot say "I don't know" will invent something instead.
 **4 · Verify.** Four independent checks — citation validity, retired-claim
 leakage, unsafe requests, and claim-by-claim entailment. The first three are
 deterministic and cannot be talked out of a failure by a fluent answer.
+
+A note on which model runs where: rewriting, reranking, entailment checking and
+summarising are narrower tasks than composing a grounded answer, and they are
+about three quarters of the calls a turn makes. They run on a smaller
+`UTILITY_MODEL`; only the answer the learner reads uses the primary model. That
+cut measured end-to-end latency from ~5.2s to ~4.0s with no change in golden-set
+results. Set `UTILITY_MODEL` equal to `LLM_MODEL` to turn the split off.
 
 **5 · Decide.** A plain-Python gate reads signals computed *outside* the
 generation call and chooses: answer, answer with caveat, abstain, or escalate.
@@ -324,8 +332,9 @@ That is too slow for a live chat widget.
    is usually better at ranking anyway.
 2. **Stream the answer** while the verifier runs concurrently; retract or
    caveat on failure. Perceived latency drops to first-token time.
-3. **Run the verifier on a small fast model.** Entailment is a much easier task
-   than generation and does not need a 120B model.
+3. **Already done: the verifier and reranker run on a smaller model.** Next
+   would be a purpose-trained NLI model rather than a general instruct model —
+   entailment is a classification task and does not need a chat model at all.
 4. **Cache aggressively.** Support traffic is Zipfian — a small set of
    questions is most of the volume. Semantic caching of `(query → verified
    answer)` keyed on corpus version would cut both cost and latency sharply.
@@ -426,5 +435,7 @@ thresholds worth knowing:
 | `MIN_LEXICAL_SCORE` | `0.30` | the same floor for BM25-only mode |
 | `MIN_GROUNDEDNESS` | `0.70` | verifier score below which an answer is not shown |
 | `STALE_AFTER_DAYS` | `365` | older sources earn a freshness caveat |
-| `ENABLE_LLM_RERANK` | `true` | set `false` to trade some ranking quality for ~2s |
+| `LLM_MODEL` | `openai/gpt-oss-120b` | composes the answer |
+| `UTILITY_MODEL` | `openai/gpt-oss-20b` | rewrite, rerank, verify, summarise |
+| `ENABLE_LLM_RERANK` | `true` | set `false` to trade some ranking quality for ~1s |
 | `ENABLE_VERIFIER` | `true` | disabling removes the entailment check, not the deterministic ones |

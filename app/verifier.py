@@ -188,7 +188,7 @@ class Verifier:
             f"ANSWER:\n{answer}"
         )
         try:
-            data = self.llm.complete_json(system, user, temperature=0.0, max_tokens=800)
+            data = self.llm.complete_json(system, user, temperature=0.0, max_tokens=1600)
         except (LLMError, TypeError):
             return None
 

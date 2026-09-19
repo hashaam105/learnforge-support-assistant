@@ -25,14 +25,43 @@ _MAX_ATTEMPTS = 4
 
 
 class GroqLLM(LLM):
+    """Groq adapter.
+
+    One provider-specific detail is load-bearing. The gpt-oss models are
+    *reasoning* models, and `max_tokens` bounds reasoning tokens plus output
+    tokens together. A budget that looks generous for a one-line JSON answer
+    can be consumed entirely by reasoning, leaving empty content — which the
+    API reports as HTTP 400 `json_validate_failed`, not as a truncation.
+
+    That failure mode is quiet and expensive: it silently disabled multi-turn
+    query rewriting here, because the rewriter caught the error, fell back to
+    the raw follow-up, and "It's the biology one" went to the retriever
+    unresolved. Two defences:
+
+      * send `reasoning_effort` (low for the short structured tasks), so the
+        model spends its budget on the answer rather than the deliberation;
+      * treat `json_validate_failed` as retryable with a doubled budget, for
+        models or future versions that ignore the hint.
+    """
+
     name = "groq"
 
-    def __init__(self, cfg: Settings | None = None) -> None:
+    def __init__(
+        self,
+        cfg: Settings | None = None,
+        *,
+        model: str | None = None,
+        reasoning_effort: str | None = None,
+    ) -> None:
         self.cfg = cfg or settings
-        self.model = self.cfg.llm_model
+        self.model = model or self.cfg.llm_model
+        self.reasoning_effort = (
+            reasoning_effort if reasoning_effort is not None else self.cfg.llm_reasoning_effort
+        )
         if not self.cfg.groq_api_key:
             raise LLMError("GROQ_API_KEY is not set")
         self._client = httpx.Client(timeout=httpx.Timeout(60.0, connect=10.0))
+        self._supports_reasoning_effort = True
 
     def complete(
         self,
@@ -43,6 +72,7 @@ class GroqLLM(LLM):
         max_tokens: int | None = None,
         json_mode: bool = False,
     ) -> str:
+        budget = self.cfg.llm_max_tokens if max_tokens is None else max_tokens
         payload: dict = {
             "model": self.model,
             "messages": [
@@ -50,10 +80,12 @@ class GroqLLM(LLM):
                 {"role": "user", "content": user},
             ],
             "temperature": self.cfg.llm_temperature if temperature is None else temperature,
-            "max_tokens": self.cfg.llm_max_tokens if max_tokens is None else max_tokens,
+            "max_tokens": budget,
         }
         if json_mode:
             payload["response_format"] = {"type": "json_object"}
+        if self.reasoning_effort and self._supports_reasoning_effort:
+            payload["reasoning_effort"] = self.reasoning_effort
 
         headers = {
             "Authorization": f"Bearer {self.cfg.groq_api_key}",
@@ -79,6 +111,26 @@ class GroqLLM(LLM):
                     raise LLMError(f"unexpected Groq response shape: {exc}") from exc
 
             last_error = f"HTTP {resp.status_code}: {resp.text[:300]}"
+            body = resp.text
+
+            # The model reasoned past its budget and returned no content.
+            # Give it more room rather than losing the turn.
+            if resp.status_code == 400 and "json_validate_failed" in body and attempt < _MAX_ATTEMPTS:
+                budget = min(budget * 2, 4000)
+                payload["max_tokens"] = budget
+                payload.setdefault("reasoning_effort", "low")
+                continue
+
+            # Some models do not accept reasoning_effort; drop it and retry once.
+            if (
+                resp.status_code == 400
+                and "reasoning_effort" in body
+                and self._supports_reasoning_effort
+            ):
+                self._supports_reasoning_effort = False
+                payload.pop("reasoning_effort", None)
+                continue
+
             if resp.status_code in _RETRY_STATUS and attempt < _MAX_ATTEMPTS:
                 # Honour Retry-After when the provider sends one.
                 wait = resp.headers.get("retry-after")

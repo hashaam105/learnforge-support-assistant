@@ -370,7 +370,7 @@ class Retriever:
         user = f"QUESTION: {query}\n\nPASSAGES:\n{blocks}"
 
         try:
-            data = self.llm.complete_json(system, user, temperature=0.0, max_tokens=400)
+            data = self.llm.complete_json(system, user, temperature=0.0, max_tokens=900)
             ranking = [str(x).strip().upper() for x in data.get("ranking", [])]
         except (LLMError, AttributeError, TypeError):
             return shortlist, False

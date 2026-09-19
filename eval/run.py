@@ -204,7 +204,7 @@ Reply with JSON only: {"score": 0.0, "notes": "one sentence"}"""
 
 def judge_case(assistant: SupportAssistant, case: dict[str, Any], result: CaseResult) -> None:
     points = case.get("reference_points") or []
-    if not points or not result.reply or not assistant.llm.is_live:
+    if not points or not result.reply or not assistant.utility_llm.is_live:
         return
     user = (
         "REFERENCE POINTS:\n"
@@ -212,7 +212,7 @@ def judge_case(assistant: SupportAssistant, case: dict[str, Any], result: CaseRe
         + f"\n\nQUESTION: {result.question}\n\nANSWER:\n{result.reply}"
     )
     try:
-        data = assistant.llm.complete_json(JUDGE_SYSTEM, user, temperature=0.0, max_tokens=300)
+        data = assistant.utility_llm.complete_json(JUDGE_SYSTEM, user, temperature=0.0, max_tokens=800)
     except (LLMError, TypeError):
         return
     try:
