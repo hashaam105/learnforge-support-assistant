@@ -53,6 +53,7 @@ class OfflineLLM(LLM):
         temperature: float | None = None,
         max_tokens: int | None = None,
         json_mode: bool = False,
+        max_attempts: int | None = None,
     ) -> str:
         task_match = _TASK.search(system)
         task = task_match.group(1).lower() if task_match else "answer"

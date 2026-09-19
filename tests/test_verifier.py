@@ -140,3 +140,26 @@ def test_hard_failure_caps_groundedness(cfg):
         _retrieval(),
     )
     assert result.groundedness <= 0.25
+
+
+# --- regressions found by the live evaluation ------------------------------
+
+
+def test_current_guidance_sharing_a_noun_with_a_retired_claim_is_not_a_leak(cfg):
+    """POLICY-04 retires "recommended downloading over cellular data", but its
+    current recommendation mentions cellular data too. Treating the bare noun
+    as diagnostic failed a correct answer."""
+    retrieval = _retrieval(claims=[{
+        "doc_id": "POLICY-04",
+        "claim_text": "The previous mobile help article recommended downloading lessons over "
+                      "cellular data. This recommendation has been removed.",
+    }])
+    result = _verifier(cfg).verify(
+        Generation(
+            answer="Use Wi-Fi for large offline downloads rather than cellular data, because "
+                   "big downloads can use a lot of your data allowance [POLICY-04].",
+            citations=["POLICY-02"],
+        ),
+        retrieval,
+    )
+    assert result.retired_claim_leaks == []

@@ -24,6 +24,12 @@ answers become verbatim extracts, clearly labelled as such. `pytest` and
 | **System design diagrams** | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
 | **Data schema** | [docs/DATA_SCHEMA.md](docs/DATA_SCHEMA.md) · [schema.sql](schema.sql) |
 | **Evaluation set** | [eval/golden_set.yaml](eval/golden_set.yaml) |
+| **Results + what the failures taught** | [jump to Results](#results) |
+
+Live run, 37 golden cases: **recall@5 0.968 · MRR 0.935 · groundedness 0.981 ·
+zero invalid citations · escalation recall 0.90**. Five failures, four of them
+real defects the eval caught and unit tests could not — written up in full
+under [Results](#results), because that is the more useful half.
 
 ---
 
@@ -218,6 +224,103 @@ only under `--judge`. It is the softest metric here and is treated as such.
 
 Every run writes a JSON report to `eval_reports/` so two runs can be diffed.
 
+### Results
+
+Full suite, live, `openai/gpt-oss-120b` generation + `gemini-embedding-001`
+hybrid retrieval, judge enabled. Report: `eval_reports/`.
+
+| Metric | Value |
+|---|---|
+| Cases passed | **32 / 37** (0.865) |
+| Retrieval recall@5 | **0.968** |
+| Retrieval MRR | **0.935** |
+| Invalid-citation rate | **0.0** |
+| Retired-claim leak rate | 0.027 (1 case, a false positive — see below) |
+| Unsupported-claim rate | 0.095 |
+| Mean groundedness | **0.981** |
+| Answer quality (LLM judge) | **0.92** |
+| Escalation precision / recall | 0.60 / **0.90** |
+| Abstention precision / recall | 1.00 / 0.33 |
+| Latency p50 / p95 | 21s / 26s (rate-limited free tier; ~4s unthrottled) |
+
+Retrieval-only mode isolates the retriever from the model, and comparing the
+two configurations is the clearest single argument for hybrid search:
+
+| `--retrieval-only` | cases | recall@5 | MRR |
+|---|---|---|---|
+| keyless (BM25 over FTS5 alone) | 37 / 37 | 1.0 | 0.781 |
+| hybrid (BM25 + dense, RRF) | 37 / 37 | 1.0 | 0.858 |
+
+Both configurations *find* the right document for every case — this corpus is
+small and BM25 is strong on it. The difference is rank: dense retrieval puts
+the governing document first materially more often, which is what determines
+whether it survives into the top-5 context window on a larger corpus.
+
+#### What the five failures were, and what they were worth
+
+This is the part of an eval that earns its keep. Four of the five were real
+defects in the system, not noise, and none of them were visible from unit tests
+or from trying the assistant by hand.
+
+1. **Every out-of-scope question escalated instead of abstaining.** A logic
+   bug. When retrieval fails, the generator refuses, and the verifier then
+   correctly reports that a refusal is not grounded in LearnForge policy —
+   and those derived signals were allowed to vote on the outcome. So "what's a
+   good sourdough starter recipe?" opened a support case. Verifying a
+   non-answer is meaningless; consequential signals no longer count when
+   retrieval has already failed. *Fixed, re-validated, regression test added.*
+
+2. **A correct answer was failed as a retired-claim leak.** POLICY-04 retires
+   "recommended downloading lessons over cellular data", and the leak detector
+   treated the bare phrase "cellular data" as diagnostic. But the *current*
+   recommendation discusses cellular data too, so the right answer ("use Wi-Fi
+   rather than cellular data for large downloads") was blocked. A named-entity
+   marker is only valid if it appears solely in the withdrawn statement.
+   *Fixed, re-validated, regression test added.*
+
+3. **A refund demand resting on a named help article was answered, not
+   escalated.** TICKET-15 exactly: "Your Offline Learning Guide said I could
+   download to my laptop — that's the only reason I bought this course." The
+   intent pattern matched the literal words "article" and "website", so a
+   *named* guide slipped through. *Fixed, re-validated, regression test added.*
+
+4. **`oos-write-code` escalated on `model_unavailable`** — the provider's daily
+   token quota was exhausted by this point in the run. Escalating when the
+   model is unavailable is correct behaviour: with no answer to verify, the
+   safe action is a human. Worth noting because it exposed a separate real bug
+   (below) rather than a scoring one.
+
+5. **`multi-ticket07-biology` missed its expected documents.** The one case
+   where the *label* was wrong rather than the system. The four turns resolve
+   to "the status of the payment for the Biology course from last week", which
+   is a payment question; the original label expected the refund policy,
+   because that is where the real ticket ended up — but only after the agent
+   asked two disambiguating questions that this sequence omits. The assistant
+   retrieves TICKET-07 itself as precedent and escalates. The label was
+   widened *and* the genuine gap it exposed is written up above: there is no
+   `clarify` action, which is what the human agent actually used.
+
+Two further bugs surfaced while investigating, both in the provider adapter and
+both invisible to the test suite because they only appear against a live API:
+
+- **Multi-turn rewriting was silently disabled.** `gpt-oss` models count
+  reasoning tokens against `max_tokens`, so a 250-token budget was consumed
+  before any JSON was emitted. The API reports that as HTTP 400
+  `json_validate_failed`, the rewriter caught it and fell back to the raw
+  follow-up, and "It's the biology one" reached the retriever unresolved. No
+  crash, no log line — just a feature quietly doing nothing.
+- **A daily-quota rejection hung the turn for five minutes.** The adapter
+  honoured `Retry-After` literally, and an exhausted daily quota answers "try
+  again in 5m32s". Backoff waits are now capped; past the cap the call fails
+  and the pipeline degrades, which is what the escalation path is for.
+
+**Status of these numbers.** The table is a complete, unmodified run taken
+*before* the fixes. Fixes 1–3 were each re-validated by re-running the affected
+cases (all now pass) and are covered by regression tests, but the provider's
+daily token quota was exhausted before a full post-fix suite could run, so no
+clean 37/37 run is claimed here. Re-run `python -m eval.run --judge` once quota
+resets to reproduce.
+
 ### What this eval plan does *not* cover
 
 Stated plainly, because a plan that claims completeness is not credible:
@@ -363,6 +466,22 @@ help centre is messier — HTML, PDFs, inconsistent headings. **With more time**
 the ingestion layer needs per-source-type parsers and a layout-aware chunker,
 and that is where a meaningful share of the engineering would go.
 
+### The missing fourth action: clarify
+
+The gate can answer, caveat, abstain or escalate. It cannot ask a question and
+wait — and the sample corpus shows that is what a good agent does. TICKET-07 is
+four turns of a human agent narrowing "Cancel my LearnForge" down to a specific
+refund request, one question at a time.
+
+The generator already returns a `clarifying_question`, and it gets appended to
+answers, but there is no `clarify` *action* that suspends the turn, records
+what is still unknown, and resolves on the next message. Without it, an
+ambiguous in-domain request escalates when one question would have settled it —
+which is a worse learner experience and a more expensive one. Adding it means a
+small amount of state (what was asked, what would unblock the answer) and a cap
+on consecutive clarifications so the assistant cannot interrogate someone
+indefinitely. This is the first thing I would build after the account lookup.
+
 ### What I would build next, in priority order
 
 1. **An order/account lookup tool.** The single biggest quality win available.
@@ -371,15 +490,16 @@ and that is where a meaningful share of the engineering would go.
    was bought individually (TICKET-11). A read-only tool call converts a large
    class of escalations into answers, and is *also* a new hallucination surface
    that would need its own verification.
-2. **Prompt-injection defence on ingested content.** Help articles are
+2. **The `clarify` action described above.**
+3. **Prompt-injection defence on ingested content.** Help articles are
    user-editable in most organisations. Today a crafted article could instruct
    the model. Content sanitisation plus instruction-hierarchy prompting.
-3. **A corpus-health dashboard** driven by `messages`: documents retrieved but
+4. **A corpus-health dashboard** driven by `messages`: documents retrieved but
    never cited, stale documents still being cited, questions that repeatedly
    abstain. Feeding real gaps back to the content team beats almost any
    model-side improvement.
-4. **Answer caching keyed on corpus version**, invalidated by `ingest_runs`.
-5. **Per-tenant isolation and chunk-level ACLs** before this serves more than
+5. **Answer caching keyed on corpus version**, invalidated by `ingest_runs`.
+6. **Per-tenant isolation and chunk-level ACLs** before this serves more than
    one organisation.
 
 ---

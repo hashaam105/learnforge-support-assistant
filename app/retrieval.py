@@ -370,7 +370,11 @@ class Retriever:
         user = f"QUESTION: {query}\n\nPASSAGES:\n{blocks}"
 
         try:
-            data = self.llm.complete_json(system, user, temperature=0.0, max_tokens=900)
+            # Advisory: fail fast. If the reranker does not answer promptly we
+            # keep the fused order, which is already a reasonable ranking.
+            data = self.llm.complete_json(
+                system, user, temperature=0.0, max_tokens=900, max_attempts=2
+            )
             ranking = [str(x).strip().upper() for x in data.get("ranking", [])]
         except (LLMError, AttributeError, TypeError):
             return shortlist, False

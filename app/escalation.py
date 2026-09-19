@@ -85,7 +85,15 @@ INTENT_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
             r"\b(?:refund|money back|money-back)\b[^.?!]{0,80}\b(?:but|however|says?|said|"
             r"guarantee|promised|screenshot|30[- ]day|outside)\b|"
             r"\b(?:your|the) (?:website|page|faq|policy|article) (?:said|says)\b|"
-            r"\bi (?:was )?(?:told|promised)\b",
+            r"\bi (?:was )?(?:told|promised)\b|"
+            # A refund claim resting on something LearnForge published. TICKET-15
+            # is exactly this: "Your Offline Learning Guide said I could
+            # download to my laptop... that's the only reason I bought this."
+            # The earlier pattern only matched the literal words "article" or
+            # "website", so a named guide slipped through and got answered.
+            r"\byour\b[^.?!]{0,60}\b(?:guide|article|help ?(?:page|article|cent(?:re|er))|"
+            r"documentation|docs|faq)\b[^.?!]{0,40}\b(?:said|says|stated|claimed|told)\b|"
+            r"\b(?:only reason|that'?s why|the reason) i (?:bought|purchased|subscribed)\b",
             re.I,
         ),
     ),
@@ -314,15 +322,29 @@ def decide(
         # Out-of-domain questions get a polite abstention, not a support
         # ticket. Opening a billing case because someone asked about sourdough
         # would be worse than saying "not something I can help with".
-        # `answer_not_supported_by_sources` belongs here because it is what the
-        # generator reports when retrieval came back empty — it is the same
-        # failure, not an additional one.
-        only_missing = set(hit) <= {
-            "no_relevant_context",
-            "low_retrieval_confidence",
+        #
+        # Once retrieval has failed, everything downstream is a *consequence*
+        # of that failure rather than independent evidence: the generator
+        # refuses, and the verifier then correctly reports that the refusal is
+        # not grounded in LearnForge policy. Letting those derived signals vote
+        # turned every out-of-scope question into an escalation — the live eval
+        # caught it on "what's a good sourdough starter recipe". Verifying a
+        # non-answer is meaningless, so they are excluded here.
+        retrieval_failed = {"no_relevant_context", "low_retrieval_confidence"} & set(hit)
+        consequential = {
             "answer_not_supported_by_sources",
+            "low_groundedness",
+            "unsupported_claims",
+            "uncited_answer",
         }
-        if only_missing and not _IN_DOMAIN.search(question) and not sensitive:
+        independent = [r for r in hit if r not in consequential and r not in retrieval_failed]
+
+        if (
+            retrieval_failed
+            and not independent
+            and not sensitive
+            and not _IN_DOMAIN.search(question)
+        ):
             action = "abstained"
         else:
             action = "escalated"

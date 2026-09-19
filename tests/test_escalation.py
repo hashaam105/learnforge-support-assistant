@@ -243,3 +243,73 @@ def test_confidence_tracks_its_inputs():
                                _good_generation(self_confidence=0.3))
     assert high > low
     assert 0.0 <= low <= high <= 1.0
+
+
+# --- regressions found by the live evaluation ------------------------------
+
+
+def test_out_of_scope_abstains_even_when_the_refusal_is_ungrounded(cfg):
+    """Verification failures on a refusal must not manufacture a support case.
+
+    When retrieval fails, the generator refuses and the verifier then reports
+    (correctly) that the refusal is not grounded in LearnForge policy. Letting
+    those derived signals vote turned every out-of-scope question into an
+    escalation. Caught live on "what's a good sourdough starter recipe".
+    """
+    decision = decide(
+        question="What's a good sourdough starter recipe?",
+        retrieval=_retrieval(top_score=0.20, margin=0.01, docs=("POLICY-02", "POLICY-01")),
+        generation=Generation(answer="I can't help with that.", answerable=False),
+        verification=Verification(
+            groundedness=0.0, judge_ran=True, unsupported_claims=["sourdough"], uncited=True
+        ),
+        cfg=cfg,
+    )
+    assert decision.action == "abstained"
+    assert decision.confidence == 0.0
+
+
+def test_in_domain_retrieval_failure_still_escalates(cfg):
+    """The same derived signals must NOT suppress a genuine support case."""
+    decision = decide(
+        question="Why has my LearnForge refund not arrived?",
+        retrieval=_retrieval(top_score=0.20, margin=0.01, docs=("POLICY-02",)),
+        generation=Generation(answer="I can't help with that.", answerable=False),
+        verification=Verification(groundedness=0.0, judge_ran=True, uncited=True),
+        cfg=cfg,
+    )
+    assert decision.action == "escalated"
+
+
+def test_independent_failure_overrides_abstention(cfg):
+    """An out-of-domain question that also asks for a human still escalates."""
+    decision = decide(
+        question="What's a good sourdough starter recipe?",
+        retrieval=_retrieval(top_score=0.20, margin=0.01, docs=("POLICY-02",)),
+        generation=Generation(answer="", answerable=False),
+        verification=Verification(groundedness=0.0),
+        wants_human=True,
+        cfg=cfg,
+    )
+    assert decision.action == "escalated"
+
+
+def test_refund_claim_resting_on_a_named_guide_escalates(cfg):
+    """TICKET-15: the earlier pattern only matched the literal word 'article'."""
+    question = (
+        "Your Offline Learning Guide said I could download to my laptop - that's "
+        "the only reason I bought this course. I want my money back."
+    )
+    assert classify_intent(question) == "refund_dispute"
+    decision = decide(
+        question=question,
+        retrieval=_retrieval(), generation=_good_generation(),
+        verification=_clean_verification(), cfg=cfg,
+    )
+    assert decision.action == "escalated"
+    assert decision.queue == "billing"
+
+
+def test_ordinary_email_change_question_is_not_dragged_into_escalation(cfg):
+    """FAQ-09 is answerable; only a purchase/identity mismatch escalates."""
+    assert classify_intent("Can I change the email address on my account?") not in ALWAYS_ESCALATE

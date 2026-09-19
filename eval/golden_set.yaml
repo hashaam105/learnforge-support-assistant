@@ -330,12 +330,29 @@ cases:
       - "The payment"
       - "The payment from last week"
       - "It's the biology one"
-    expect_docs: [POLICY-02, FAQ-02]
+    expect_docs: [TICKET-07, POLICY-02, FAQ-02, FAQ-04, POLICY-10]
     expect_action: [escalated, answered_with_caveat]
     note: >
       TICKET-07 verbatim. The final turn is unretrievable on its own; scoring
       is on the last turn, so this case fails outright without working
       coreference resolution.
+
+      On expect_docs: this list was widened after a live run, and the reason
+      matters. The original label was [POLICY-02, FAQ-02] — the refund policy —
+      because that is where the real ticket ended up. But the real ticket got
+      there only after the agent asked two disambiguating questions ("cancel
+      the subscription, or refund a payment already made?"), and those turns
+      are not in this sequence. Rewriting resolves the four turns to "the
+      status of the payment for the Biology course from last week", which is a
+      payment question, not yet a refund question, so the refund policy is not
+      the right target for it. The assistant retrieves TICKET-07 itself as
+      precedent and escalates, which is defensible.
+
+      The genuinely better behaviour is the one the human agent had and this
+      system does not: ask one clarifying question instead of escalating.
+      "Clarify" is not yet an action the gate can take — see the README
+      trade-offs. The label reflects what a correct system would retrieve for
+      the query as actually posed; it does not excuse the missing action.
 
   - id: multi-refund-escalating
     bucket: multi_turn

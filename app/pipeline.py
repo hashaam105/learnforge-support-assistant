@@ -134,7 +134,7 @@ class SupportAssistant:
             generation=generation,
             verification=verification,
             wants_human=ctx.wants_human,
-            prior_failures=_prior_failures(history, self.store, session_id),
+            prior_failures=_prior_failures(self.store, session_id),
             cfg=self.cfg,
         )
 
@@ -322,7 +322,7 @@ def _source_cards(retrieval: RetrievalResult, generation: Generation) -> list[di
     return cards
 
 
-def _prior_failures(history: list[dict[str, Any]], store: Store, session_id: str) -> int:
+def _prior_failures(store: Store, session_id: str) -> int:
     """How many recent assistant turns already failed this learner."""
     rows = store.conn.execute(
         """

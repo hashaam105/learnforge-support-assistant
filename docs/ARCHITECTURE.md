@@ -177,8 +177,8 @@ erDiagram
         int has_deprecation_notice
     }
     embeddings {
-        text chunk_id PK_FK
-        text model PK "swap is additive"
+        text chunk_id PK "also FK to chunks"
+        text model PK "swap is additive, not a migration"
         blob vector "float32, L2-normalised"
     }
     deprecated_claims {

@@ -36,8 +36,15 @@ class LLM(ABC):
         temperature: float | None = None,
         max_tokens: int | None = None,
         json_mode: bool = False,
+        max_attempts: int | None = None,
     ) -> str:
-        ...
+        """Generate a completion.
+
+        `max_attempts` bounds provider retries for this call. Advisory calls —
+        ones whose failure the pipeline can absorb, like reranking — should
+        pass a low value. Retrying a call nobody is waiting on is how a
+        four-second turn becomes a four-minute one.
+        """
 
     def complete_json(
         self,
@@ -46,6 +53,7 @@ class LLM(ABC):
         *,
         temperature: float | None = None,
         max_tokens: int | None = None,
+        max_attempts: int | None = None,
     ) -> dict[str, Any]:
         """Complete and parse JSON, tolerating fenced or prose-wrapped output."""
         raw = self.complete(
@@ -54,6 +62,7 @@ class LLM(ABC):
             temperature=temperature,
             max_tokens=max_tokens,
             json_mode=True,
+            max_attempts=max_attempts,
         )
         return extract_json(raw)
 

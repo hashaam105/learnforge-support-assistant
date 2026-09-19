@@ -23,6 +23,25 @@ ENDPOINT = "https://api.groq.com/openai/v1/chat/completions"
 _RETRY_STATUS = {408, 429, 500, 502, 503, 504}
 _MAX_ATTEMPTS = 4
 
+# The longest we will sit inside a retry backoff. Per-minute throttling
+# resolves well inside this; a daily-quota rejection does not, and waiting it
+# out would strand the turn.
+_MAX_RETRY_WAIT = 10.0
+
+
+def _retry_after(header: str | None, attempt: int) -> float:
+    """Seconds to wait, from the provider's hint or exponential backoff.
+
+    Groq sends plain seconds ("332.64"); the HTTP spec also allows an integer
+    or a date, so anything unparseable falls back to backoff.
+    """
+    if header:
+        try:
+            return float(header)
+        except ValueError:
+            pass
+    return float(min(2**attempt, 8))
+
 
 class GroqLLM(LLM):
     """Groq adapter.
@@ -71,8 +90,11 @@ class GroqLLM(LLM):
         temperature: float | None = None,
         max_tokens: int | None = None,
         json_mode: bool = False,
+        max_attempts: int | None = None,
     ) -> str:
+        attempts = _MAX_ATTEMPTS if max_attempts is None else max(1, max_attempts)
         budget = self.cfg.llm_max_tokens if max_tokens is None else max_tokens
+        grew_budget = False
         payload: dict = {
             "model": self.model,
             "messages": [
@@ -93,12 +115,12 @@ class GroqLLM(LLM):
         }
 
         last_error = "unknown"
-        for attempt in range(1, _MAX_ATTEMPTS + 1):
+        for attempt in range(1, attempts + 1):
             try:
                 resp = self._client.post(ENDPOINT, json=payload, headers=headers)
             except httpx.HTTPError as exc:
                 last_error = f"transport error: {exc}"
-                if attempt == _MAX_ATTEMPTS:
+                if attempt == attempts:
                     break
                 time.sleep(min(2**attempt, 8))
                 continue
@@ -114,11 +136,21 @@ class GroqLLM(LLM):
             body = resp.text
 
             # The model reasoned past its budget and returned no content.
-            # Give it more room rather than losing the turn.
-            if resp.status_code == 400 and "json_validate_failed" in body and attempt < _MAX_ATTEMPTS:
+            # Give it more room once. Only once: if double the budget and
+            # reduced reasoning still produce nothing, more of both will not
+            # help, and repeatedly retrying a slow call is worse than failing.
+            # (Retrying this four times turned a fast reranker fallback into a
+            # four-minute stall.)
+            if (
+                resp.status_code == 400
+                and "json_validate_failed" in body
+                and not grew_budget
+                and attempt < attempts
+            ):
+                grew_budget = True
                 budget = min(budget * 2, 4000)
                 payload["max_tokens"] = budget
-                payload.setdefault("reasoning_effort", "low")
+                payload["reasoning_effort"] = "low"
                 continue
 
             # Some models do not accept reasoning_effort; drop it and retry once.
@@ -131,15 +163,23 @@ class GroqLLM(LLM):
                 payload.pop("reasoning_effort", None)
                 continue
 
-            if resp.status_code in _RETRY_STATUS and attempt < _MAX_ATTEMPTS:
-                # Honour Retry-After when the provider sends one.
-                wait = resp.headers.get("retry-after")
-                delay = float(wait) if wait and wait.replace(".", "", 1).isdigit() else min(2**attempt, 8)
+            if resp.status_code in _RETRY_STATUS and attempt < attempts:
+                # Honour Retry-After, but only up to a point. A provider that
+                # has exhausted a *daily* quota answers "try again in 5m32s",
+                # and sleeping that out inside a support turn is not waiting,
+                # it is hanging: the learner sees nothing for five minutes and
+                # the pipeline cannot degrade because it never regains control.
+                # Past the cap we give up and let the caller fall back — the
+                # escalation path exists for exactly this.
+                delay = _retry_after(resp.headers.get("retry-after"), attempt)
+                if delay > _MAX_RETRY_WAIT:
+                    last_error = f"HTTP {resp.status_code}: provider asked for {delay:.0f}s backoff"
+                    break
                 time.sleep(delay)
                 continue
             break
 
-        raise LLMError(f"Groq call failed after {_MAX_ATTEMPTS} attempts — {last_error}")
+        raise LLMError(f"Groq call failed after {attempts} attempt(s) — {last_error}")
 
     def close(self) -> None:
         self._client.close()

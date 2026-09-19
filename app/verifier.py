@@ -66,7 +66,15 @@ _UNSAFE_REQUEST = re.compile(
 )
 
 _SALIENT = re.compile(r"\b(\d{1,3})[-\s]?(day|days|user|users|quiz|quizzes|month|months)\b", re.I)
-_PROPER_NOUN = re.compile(r"\b(?:Internet Explorer|cellular data|five-user family plan)\b", re.I)
+
+# Named entities that identify a retired claim on their own. The bar is that
+# the phrase must appear ONLY in the withdrawn statement, never in the current
+# guidance. "cellular data" was here and had to be removed: POLICY-04 retires
+# "recommended downloading lessons over cellular data" but its *current*
+# recommendation discusses cellular data too, so a correct answer ("use Wi-Fi
+# rather than cellular data for large downloads") was being failed as a leak.
+# The distinguishing content is the recommendation, not the noun.
+_PROPER_NOUN = re.compile(r"\b(?:Internet Explorer|five-user family plan)\b", re.I)
 
 _CITE_IN_TEXT = re.compile(r"\[([A-Z]+-\d+)\]")
 
