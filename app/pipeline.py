@@ -16,6 +16,7 @@ it from the database without re-running anything.
 from __future__ import annotations
 
 import json
+import re
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -35,6 +36,7 @@ from app.providers import get_embedder, get_llm
 from app.providers.base import LLM, Embedder, LLMError
 from app.retrieval import RetrievalResult, Retriever
 from app.store import Store
+from app.text import content_terms
 from app.verifier import Verification, Verifier
 
 SUMMARISE_EVERY = 6  # turns
@@ -295,14 +297,31 @@ class SupportAssistant:
 
 
 def _source_cards(retrieval: RetrievalResult, generation: Generation) -> list[dict[str, Any]]:
-    """Per-document provenance for the UI, cited documents first."""
+    """Per-document provenance for the UI, cited documents first.
+
+    When several chunks of one document are in context, the card shows the one
+    that actually supports the answer rather than simply the highest-scoring
+    one. Those differ more often than you would expect: POLICY-02 states the
+    14-day refund rule in its first chunk, but its second chunk ranks higher
+    for a general refund question, so the card used to display text that said
+    nothing about 14 days — directly under an answer claiming exactly that.
+    A citation a reader cannot verify by looking is worse than no citation,
+    because it looks checked.
+    """
     cited = set(generation.citations)
+    answer_terms = set(content_terms(generation.answer or ""))
+
+    by_doc: dict[str, list] = {}
+    for c in retrieval.candidates:
+        by_doc.setdefault(c.doc_id, []).append(c)
+
     seen: set[str] = set()
     cards: list[dict[str, Any]] = []
-    for c in retrieval.candidates:
-        if c.doc_id in seen:
+    for candidate in retrieval.candidates:
+        if candidate.doc_id in seen:
             continue
-        seen.add(c.doc_id)
+        seen.add(candidate.doc_id)
+        c = _best_supporting_chunk(by_doc[candidate.doc_id], answer_terms)
         cards.append(
             {
                 "doc_id": c.doc_id,
@@ -315,11 +334,66 @@ def _source_cards(retrieval: RetrievalResult, generation: Generation) -> list[di
                 "is_stale": c.is_stale,
                 "has_deprecation_notice": c.has_deprecation_notice,
                 "source_uri": c.source_uri,
-                "excerpt": (c.text[:240] + "…") if len(c.text) > 240 else c.text,
+                "excerpt": _evidence_excerpt(c.text, answer_terms),
             }
         )
     cards.sort(key=lambda card: (not card["cited"], -card["score"]))
     return cards
+
+
+_EXCERPT_CHARS = 260
+_SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
+
+
+def _evidence_excerpt(text: str, answer_terms: set[str], limit: int = _EXCERPT_CHARS) -> str:
+    """A window centred on the sentence that supports the answer.
+
+    Taking the first N characters is the obvious thing and the wrong one. The
+    rule a reader wants to check is rarely the opening line of its chunk:
+    POLICY-02 opens on cancellation and states the 14-day refund window
+    several sentences later, so a leading excerpt showed none of what the
+    answer claimed. The citation then looks checkable and isn't, which is
+    worse than showing nothing.
+    """
+    text = text.strip()
+    if len(text) <= limit:
+        return text
+
+    sentences = [s for s in _SENTENCE_SPLIT.split(text) if s.strip()]
+    if not answer_terms or not sentences:
+        return text[:limit].rstrip() + "…"
+
+    best_at, best_score = 0, -1
+    cursor = 0
+    for sentence in sentences:
+        start = text.find(sentence, cursor)
+        cursor = (start if start != -1 else cursor) + len(sentence)
+        score = len(answer_terms & set(content_terms(sentence)))
+        if score > best_score:
+            best_at, best_score = (start if start != -1 else 0), score
+
+    # Centre the window on that sentence, then clamp to the text.
+    start = max(0, best_at - limit // 4)
+    end = min(len(text), start + limit)
+    start = max(0, end - limit)
+    return ("…" if start > 0 else "") + text[start:end].strip() + ("…" if end < len(text) else "")
+
+
+def _best_supporting_chunk(chunks: list, answer_terms: set[str]):
+    """Of one document's retrieved chunks, the one the answer actually drew on.
+
+    Overlap with the answer's own vocabulary is a crude signal, but it is the
+    right one here: we are picking what to *show* as evidence, and the useful
+    excerpt is the passage a reader can match against the sentence above it.
+    With no answer to compare against (an abstention, say) the ranking order
+    stands.
+    """
+    if len(chunks) == 1 or not answer_terms:
+        return chunks[0]
+    return max(
+        chunks,
+        key=lambda c: (len(answer_terms & set(content_terms(c.text))), c.final_score),
+    )
 
 
 def _prior_failures(store: Store, session_id: str) -> int:

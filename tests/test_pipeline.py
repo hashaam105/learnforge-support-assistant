@@ -120,3 +120,53 @@ def test_diagnostics_expose_the_whole_decision_trail(assistant):
         assert section in result.diagnostics
     assert "candidates" in result.diagnostics["retrieval"]
     assert "reason_codes" in result.diagnostics["decision"]
+
+
+# --- provenance cards must show evidence a reader can check ----------------
+
+
+def test_card_shows_the_chunk_that_supports_the_answer():
+    """POLICY-02 states the 14-day rule in its first chunk, but its second
+    chunk often outranks it on a general refund question. Showing the
+    higher-ranked chunk put unrelated text under a 14-day claim."""
+    from app.pipeline import _best_supporting_chunk
+    from app.text import content_terms
+
+    class _C:
+        def __init__(self, text, score):
+            self.text, self.final_score = text, score
+
+    supporting = _C("For individual course purchases the standard refund period "
+                    "is generally 14 days.", 0.40)
+    higher_ranked = _C("Certain promotional bundles and third-party purchases may "
+                       "have separate terms.", 0.90)
+    answer_terms = set(content_terms("You generally have 14 days to request a refund "
+                                     "for an individual course."))
+    assert _best_supporting_chunk([higher_ranked, supporting], answer_terms) is supporting
+
+
+def test_excerpt_is_centred_on_the_supporting_sentence():
+    from app.pipeline import _evidence_excerpt
+    from app.text import content_terms
+
+    text = ("You can cancel an active subscription at any time through Account Settings. "
+            "Cancellation normally prevents the next renewal. " + ("Filler sentence. " * 12) +
+            "For individual course purchases the standard refund period is generally 14 days.")
+    excerpt = _evidence_excerpt(text, set(content_terms("refund period is 14 days")))
+    assert "14 days" in excerpt
+    assert len(excerpt) < len(text)
+
+
+def test_short_chunks_are_shown_whole():
+    from app.pipeline import _evidence_excerpt
+
+    text = "Refunds are generally available within 14 days."
+    assert _evidence_excerpt(text, {"refund"}) == text
+
+
+def test_excerpt_survives_an_abstention_with_no_answer_terms():
+    from app.pipeline import _evidence_excerpt
+
+    text = "A" * 400
+    excerpt = _evidence_excerpt(text, set())
+    assert excerpt.endswith("…") and len(excerpt) <= 261
