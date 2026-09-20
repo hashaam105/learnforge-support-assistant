@@ -575,10 +575,16 @@ python -m app.cli                  # chat; /why /sources /escalations /stats
 python -m app.cli --ask "..." --json
 python -m app.cli --demo           # every behaviour, scripted
 
-uvicorn app.api:app --reload       # http://127.0.0.1:8000
+uvicorn app.api:app --reload       # then open http://127.0.0.1:8000
 #   POST /chat   GET /health   GET /escalations
 #   POST /ingest GET /sessions/{id}
 ```
+
+The chat UI is **served by the API** at `/`. Opening `app/web/index.html`
+directly from disk will not work: its `fetch('/chat')` resolves to
+`file:///chat`. The page detects that case and says so rather than failing
+with an opaque network error, but the fix is to start the server and use the
+URL above.
 
 The `/chat` response carries the full decision trail — rewritten query,
 candidate scores, verification result, reason codes — and the web UI renders

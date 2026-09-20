@@ -207,7 +207,11 @@ async function ask(message) {
   } catch (err) {
     pending.remove();
     const row = el('div', 'msg');
-    row.append(el('div', 'bubble', 'Request failed: ' + err.message));
+    row.append(el('div', 'bubble', OPENED_AS_FILE
+      ? 'This page was opened from disk, so it has no API to talk to. Run ' +
+        '"uvicorn app.api:app" and open http://127.0.0.1:8000 instead.'
+      : 'Request failed: ' + err.message +
+        ' — is the API running? Start it with "uvicorn app.api:app".'));
     thread.append(row);
   } finally {
     send.disabled = false;
@@ -237,15 +241,40 @@ for (const q of EXAMPLES) {
   examples.append(b);
 }
 
-fetch('/health').then(r => r.json()).then(h => {
-  const c = h.capabilities;
-  document.getElementById('caps').innerHTML =
-    `generation <b>${c.generation}</b> · retrieval <b>${c.retrieval_mode}</b>` +
-    ` · verifier <b>${c.verifier ? 'on' : 'off'}</b>` +
-    ` · corpus <b>${h.corpus.documents} docs / ${h.corpus.chunks} chunks</b>`;
-}).catch(() => {
-  document.getElementById('caps').textContent = 'capability check failed';
-});
+// This page is SERVED BY the API; it is not a standalone file. Opened via
+// file:// every relative fetch resolves to file:///chat and dies with an
+// opaque "Failed to fetch". Detect that specific mistake and say what to do,
+// because "capability check failed" sends people hunting for a bug that
+// isn't there.
+const OPENED_AS_FILE = location.protocol === 'file:';
+
+function showSetupHelp(detail) {
+  const caps = document.getElementById('caps');
+  caps.innerHTML = OPENED_AS_FILE
+    ? 'This page needs the API running behind it. Start it with ' +
+      '<b>uvicorn app.api:app</b> and open <b>http://127.0.0.1:8000</b> ' +
+      '— not the file:// path.'
+    : `Cannot reach the API${detail ? ' (' + detail + ')' : ''}. ` +
+      'Start it with <b>uvicorn app.api:app</b>.';
+  caps.style.color = 'var(--warn)';
+  input.disabled = true;
+  send.disabled = true;
+  input.placeholder = OPENED_AS_FILE
+    ? 'Open http://127.0.0.1:8000 instead of the file:// path'
+    : 'API unreachable';
+}
+
+if (OPENED_AS_FILE) {
+  showSetupHelp();
+} else {
+  fetch('/health').then(r => r.json()).then(h => {
+    const c = h.capabilities;
+    document.getElementById('caps').innerHTML =
+      `generation <b>${c.generation}</b> · retrieval <b>${c.retrieval_mode}</b>` +
+      ` · verifier <b>${c.verifier ? 'on' : 'off'}</b>` +
+      ` · corpus <b>${h.corpus.documents} docs / ${h.corpus.chunks} chunks</b>`;
+  }).catch(err => showSetupHelp(err.message));
+}
 </script>
 </body>
 </html>
