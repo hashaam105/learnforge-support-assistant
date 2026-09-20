@@ -1,9 +1,20 @@
 # LearnForge AI Support Assistant
 
-A retrieval-augmented support assistant for an ed-tech knowledge base, built to
-do three things that a plain RAG loop does not: **refuse to repeat withdrawn
-policy**, **hold a multi-turn conversation**, and **hand over to a human on
-rules a support lead can read and change**.
+A retrieval-augmented support assistant over an ed-tech knowledge base:
+hybrid retrieval, grounded generation with verifiable citations, multi-turn
+conversation, and a human handoff governed by rules rather than by the model's
+opinion of itself.
+
+    contextualize -> retrieve -> generate -> verify -> decide -> persist
+
+Most of the work is the ordinary path — chunking that respects authored
+structure, BM25 fused with dense retrieval, a grounded prompt, and a
+verification pass. On top of that sits a thin layer for the thing this
+particular corpus does that most do not: it contradicts itself on purpose, and
+it documents its own stale policy inline. That layer is about 5% of the code
+and it is the most interesting 5%, so it gets discussed at length below — but
+13 of the 37 evaluation cases are ordinary questions with no trap in them, and
+those are the ones a support assistant answers all day.
 
 Corpus: 40 documents — 15 course FAQs, 10 help-centre policies, 15 past support
 ticket transcripts.
@@ -35,8 +46,10 @@ under [Results](#results), because that is the more useful half.
 
 ## What the sample data is actually testing
 
-The corpus README says the contradictions are deliberate. Mapping them is the
-whole design brief — each trap forces a specific mechanism:
+The corpus README says the contradictions are deliberate, and each one forces a
+specific mechanism. This table is about the hard cases, not the common ones —
+the everyday path is the pipeline above, and it carries the majority of the
+traffic and of the evaluation set.
 
 | Trap in the data | Mechanism it forces |
 |---|---|
@@ -481,6 +494,33 @@ which is a worse learner experience and a more expensive one. Adding it means a
 small amount of state (what was asked, what would unblock the answer) and a cap
 on consecutive clarifications so the assistant cannot interrogate someone
 indefinitely. This is the first thing I would build after the account lookup.
+
+### A note on fitting the dataset
+
+Two detectors were overfit to the sample *file* rather than to the domain, and
+are worth naming because the eval could not catch them — the eval uses the same
+corpus the mistakes were copied from.
+
+The elliptical-reference matcher enumerated `(biology|physics|chemistry|python|
+ux|design|data)`: the exact course subjects in the sample tickets. "The
+astronomy one" silently failed. It now matches on shape — `the <subject> one` —
+with a filler-word guard so "the last one" is not read as a subject.
+
+The retired-claim detector hardcoded two named entities, `Internet Explorer`
+and `five-user family plan`, lifted straight out of this corpus. That is a
+lookup table for one dataset, not a detector, and it would do nothing on any
+other knowledge base. Names are now derived from each quarantined claim:
+multi-word capitalised phrases and multi-word quoted phrases. The derivation
+also has to skip the *replacement* wording, because a retirement sentence
+quotes both sides of the change — POLICY-06 retires "instantly" and introduces
+"automatically synchronized", and flagging the second would fail every correct
+answer about progress syncing.
+
+Domain-specific is not the same as overfit. The intent patterns (fraud,
+duplicate charge, account ownership) and the topic vocabulary are tuned to
+ed-tech support on purpose; a generic classifier would route worse. The
+distinction is whether swapping in a different ed-tech knowledge base would
+break it.
 
 ### What I would build next, in priority order
 

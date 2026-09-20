@@ -42,7 +42,30 @@ _COURSE_QUOTED = re.compile(r"[\"“]([A-Z][\w][^\"”]{2,60})[\"”]")
 _COURSE_NAMED = re.compile(
     r"\b(?:the\s+)?([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+){0,3})\s+(?:course|masterclass|class)\b"
 )
-_COURSE_TOPIC = re.compile(r"\bthe\s+(biology|physics|chemistry|python|ux|design|data)\s+one\b", re.I)
+# Elliptical reference to a course by subject: "it's the biology one".
+#
+# This deliberately does NOT enumerate subjects. An earlier version listed
+# (biology|physics|chemistry|python|ux|design|data) — exactly the courses in
+# the sample tickets — so "the astronomy one" silently failed. The eval could
+# not catch that, because the eval uses the same corpus the list was copied
+# from. Shape is the signal here, not vocabulary.
+_COURSE_TOPIC = re.compile(
+    r"\b(?:the|that|my)\s+"
+    r"([a-z][a-z0-9+#.-]{2,24}(?:\s+[a-z][a-z0-9+#.-]{2,24})?)"
+    r"\s+(?:one|course|class|module)\b",
+    re.I,
+)
+
+# Words that fill the same slot without naming a subject. Without this guard
+# the generic pattern happily reports that the learner is asking about the
+# "last" course.
+_NOT_A_SUBJECT = frozenset(
+    """
+    last first second third fourth next previous other another same new old only
+    right wrong main whole free paid full short long latest recent current final
+    original second-last big small good bad cheap expensive
+    """.split()
+)
 _ORDER_ID = re.compile(r"\border\s*(?:number|no\.?|#|id)?\s*[:#]?\s*([A-Z0-9][A-Z0-9-]{4,})\b", re.I)
 _AMOUNT = re.compile(r"([$£€]\s?\d{1,5}(?:[.,]\d{2})?)")
 _PLATFORM = {
@@ -227,9 +250,13 @@ def extract_slots(text: str) -> dict[str, Any]:
     if course:
         slots["course_name"] = course.group(1).strip()
     else:
-        topic = _COURSE_TOPIC.search(text)
-        if topic:
-            slots["course_topic"] = topic.group(1).lower()
+        for match in _COURSE_TOPIC.finditer(text):
+            subject = match.group(1).lower().strip(".-")
+            # Reject if ANY word is a filler, so "the very last one" is caught
+            # as well as "the last one".
+            if not any(w in _NOT_A_SUBJECT for w in subject.split()):
+                slots["course_topic"] = subject
+                break
 
     order = _ORDER_ID.search(text)
     if order:

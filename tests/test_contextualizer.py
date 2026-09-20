@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from app.contextualizer import Contextualizer, extract_slots, redact
 from app.providers.offline import OfflineLLM
 
@@ -113,3 +115,27 @@ def test_normal_question_is_not_a_human_request(cfg):
         "Does a person review refund requests?", [], {}
     )
     assert not ctx.wants_human
+
+
+# --- subject reference is matched by shape, not by a fixed vocabulary ------
+
+
+@pytest.mark.parametrize(
+    "message,expected",
+    [
+        ("It's the biology one", "biology"),
+        ("the astronomy one", "astronomy"),
+        ("I mean the quantum-computing one", "quantum-computing"),
+        ("the machine learning course", "machine learning"),
+    ],
+)
+def test_any_subject_resolves_not_just_the_sample_ones(message, expected):
+    """The subject list used to be (biology|physics|chemistry|python|ux|design|
+    data) — the exact courses in the sample tickets. Any other course failed."""
+    assert extract_slots(message).get("course_topic") == expected
+
+
+@pytest.mark.parametrize("message", ["the last one", "the very last one", "the other one",
+                                     "the first one", "the same one"])
+def test_filler_words_are_not_mistaken_for_a_subject(message):
+    assert "course_topic" not in extract_slots(message)

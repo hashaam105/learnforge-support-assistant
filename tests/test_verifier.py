@@ -163,3 +163,47 @@ def test_current_guidance_sharing_a_noun_with_a_retired_claim_is_not_a_leak(cfg)
         retrieval,
     )
     assert result.retired_claim_leaks == []
+
+
+# --- named entities are derived, not enumerated ----------------------------
+
+
+def test_named_entities_are_derived_from_any_claim(cfg):
+    """A withdrawn policy this corpus has never seen must still be detectable."""
+    from app.verifier import _named_entities
+
+    claim = 'An older article listed Netscape Navigator as a supported browser.'
+    assert "netscape navigator" in _named_entities(claim)
+
+
+def test_replacement_wording_is_not_treated_as_retired(cfg):
+    """POLICY-06 quotes BOTH the retired term and the one that replaced it."""
+    from app.verifier import _named_entities
+
+    claim = ('Archived documentation previously claimed that progress was saved "instantly." '
+             'That wording has been replaced with "automatically synchronized".')
+    assert "automatically synchronized" not in _named_entities(claim)
+
+
+def test_lowercase_common_phrases_are_not_named_entities(cfg):
+    """'cellular data' is vocabulary the current guidance uses too."""
+    from app.verifier import _named_entities
+
+    claim = ("The previous mobile help article recommended downloading lessons over "
+             "cellular data. This recommendation has been removed.")
+    assert not any("cellular" in t for t in _named_entities(claim))
+
+
+def test_unseen_retired_product_leaks_are_caught(cfg):
+    """End-to-end: a claim with a product name nothing hardcoded knows about."""
+    retrieval = _retrieval(claims=[{
+        "doc_id": "POLICY-99",
+        "claim_text": "An older article listed Netscape Navigator as a supported browser. "
+                      "That information is obsolete.",
+    }])
+    result = _verifier(cfg).verify(
+        Generation(answer="You can use Netscape Navigator to view the course.",
+                   citations=["POLICY-02"]),
+        retrieval,
+    )
+    assert result.retired_claim_leaks

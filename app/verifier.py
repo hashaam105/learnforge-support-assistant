@@ -67,14 +67,32 @@ _UNSAFE_REQUEST = re.compile(
 
 _SALIENT = re.compile(r"\b(\d{1,3})[-\s]?(day|days|user|users|quiz|quizzes|month|months)\b", re.I)
 
-# Named entities that identify a retired claim on their own. The bar is that
-# the phrase must appear ONLY in the withdrawn statement, never in the current
-# guidance. "cellular data" was here and had to be removed: POLICY-04 retires
-# "recommended downloading lessons over cellular data" but its *current*
-# recommendation discusses cellular data too, so a correct answer ("use Wi-Fi
-# rather than cellular data for large downloads") was being failed as a leak.
-# The distinguishing content is the recommendation, not the noun.
-_PROPER_NOUN = re.compile(r"\b(?:Internet Explorer|five-user family plan)\b", re.I)
+# Named entities are derived from each quarantined claim rather than listed.
+#
+# An earlier version hardcoded (Internet Explorer|five-user family plan) —
+# two entities lifted straight out of this corpus. That is not a detector, it
+# is a lookup table for one dataset, and it silently does nothing on any other
+# knowledge base. These two patterns extract the same terms from the claim
+# text itself, so a new withdrawn policy is covered the moment it is ingested.
+#
+# The qualifying signal is *being a name*: a multi-word capitalised phrase
+# ("Internet Explorer") or a multi-word quoted phrase ("five-user family
+# plan"). That rule also does the job the hardcoded list needed a manual
+# exception for. POLICY-04 retires "recommended downloading lessons over
+# cellular data", but "cellular data" is lowercase, unquoted, ordinary
+# vocabulary that the *current* guidance uses too ("use Wi-Fi rather than
+# cellular data"). It is not a name, so it is not treated as diagnostic, and
+# the correct answer is no longer failed as a leak.
+_NAMED_ENTITY = re.compile(r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z0-9]+)+)\b")
+_QUOTED_PHRASE = re.compile(r"[\"“]([^\"”]{3,60})[\"”]")
+
+# Introduces the wording that *superseded* the retired one, so the quote that
+# follows is current policy and must not be treated as a withdrawn claim.
+_REPLACEMENT_CUE = re.compile(
+    r"\b(?:replaced (?:with|by)|changed to|updated to|now (?:reads|says|uses)|"
+    r"current(?:ly)? (?:reads|says|wording)|instead of this|in favour of|in favor of)\b\s*$",
+    re.I,
+)
 
 _CITE_IN_TEXT = re.compile(r"\[([A-Z]+-\d+)\]")
 
@@ -233,7 +251,7 @@ def _find_retired_leaks(answer: str, deprecated_claims: list[dict[str, Any]]) ->
     for claim in deprecated_claims:
         text = claim.get("claim_text", "")
         tokens = {f"{m.group(1)} {m.group(2).lower()}" for m in _SALIENT.finditer(text)}
-        tokens |= {m.group(0).lower() for m in _PROPER_NOUN.finditer(text)}
+        tokens |= _named_entities(text)
         for token in tokens:
             for position in _find_token(answer, token):
                 window = answer[
@@ -246,6 +264,33 @@ def _find_retired_leaks(answer: str, deprecated_claims: list[dict[str, Any]]) ->
                 continue
             break
     return sorted(set(leaks))
+
+
+def _named_entities(claim_text: str) -> set[str]:
+    """Distinctive names stated inside a withdrawn claim.
+
+    Only multi-word forms qualify. A single capitalised word is usually just
+    the start of a sentence ("Older help-center documentation..."), and a
+    single quoted word is usually ordinary vocabulary being quoted for
+    emphasis — POLICY-06 retires the wording "instantly", which is a real
+    withdrawn term but far too common to match safely against a free-text
+    answer.
+    """
+    terms = {m.group(1).strip().lower() for m in _NAMED_ENTITY.finditer(claim_text)}
+    for match in _QUOTED_PHRASE.finditer(claim_text):
+        phrase = match.group(1).strip(" .,;:").lower()
+        if len(phrase.split()) < 2:
+            continue
+        # A retirement sentence quotes BOTH sides of the change. POLICY-06
+        # reads: progress was saved "instantly" — that wording has been
+        # replaced with "automatically synchronized". The second quote is the
+        # *current* wording, and flagging it would fail every correct answer
+        # about progress syncing. Look at what introduces the quote.
+        lead_in = claim_text[max(0, match.start() - 40) : match.start()].lower()
+        if _REPLACEMENT_CUE.search(lead_in):
+            continue
+        terms.add(phrase)
+    return {t for t in terms if len(t) >= 6}
 
 
 def _find_token(answer: str, token: str) -> list[int]:
